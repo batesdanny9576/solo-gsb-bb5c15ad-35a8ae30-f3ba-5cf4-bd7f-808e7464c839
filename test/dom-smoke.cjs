@@ -232,8 +232,10 @@ global.URL = { createObjectURL: () => 'blob:mock', revokeObjectURL() {} };
 // 下载链路（Blob → URL.createObjectURL → <a download>.click）：全部替换为可观测 mock
 global.__downloads = [];
 global.confirm = () => true;
-global.setInterval = () => 0;
-global.clearInterval = () => {};
+// 捕获播放计时器回调，测试可手动逐拍触发；clearInterval 清空当前全部计时器
+global.__intervalCbs = [];
+global.setInterval = (fn) => { global.__intervalCbs.push(fn); return global.__intervalCbs.length; };
+global.clearInterval = () => { global.__intervalCbs.length = 0; };
 global.FileReader = class { readAsText() { this.onload({ target: { result: '{}' } }); } };
 global.HTMLElement = El;
 
@@ -397,5 +399,108 @@ check(!document.body.classList.contains('printing-report'), '关闭后清理打�
 // ---------- 删除 ----------
 ensure('compareList').querySelector('.rr-del').click();
 check(JSON.parse(storage['stage-blocking:v1']).comparisons.length === 0, '删除对比后存档更新');
+
+// ---------- 排练区间循环 ----------
+const savedArchive = () => JSON.parse(storage['stage-blocking:v1']);
+const tickPlay = (n) => { for (let i = 0; i < n; i++) global.__intervalCbs.slice().forEach((fn) => fn()); };
+const reportsCountBefore = savedArchive().reports.length;
+
+check(!ensure('loopBar').classList.contains('active'), '初始：循环区间条未激活');
+check(ensure('loopEnable').checked === false, '初始：未勾选区间循环');
+check(ensure('loopFrom').disabled === true && ensure('loopTo').disabled === true,
+  '未启用时起止拍下拉禁用');
+check(/未启用/.test(ensure('loopNote').textContent), '状态提示：全程播放');
+check(savedArchive().loopRange === null, '存档中 loopRange 为 null（旧存档兼容口径）');
+
+// 勾选启用区间 1..3：立即定位到第 1 拍并开始循环播放
+ensure('loopFrom').value = '1';
+ensure('loopTo').value = '3';
+ensure('loopEnable').checked = true;
+ensure('loopEnable').dispatch('change', { target: ensure('loopEnable') });
+let s = savedArchive();
+check(s.loopRange && s.loopRange.from === 1 && s.loopRange.to === 3, '区间 1..3 随浏览器存档保存');
+check(s.currentBeat === 1, '启用即预览：先定位到区间起点（第 1 拍）');
+check(ensure('loopBar').classList.contains('active'), '循环区间条激活');
+check(global.__intervalCbs.length === 1, '已启动播放计时器');
+check(ensure('playBtn').classList.contains('active'), '播放按钮呈播放态');
+check(/循环区间/.test(ensure('loopNote').textContent), '状态提示：循环区间');
+
+// 推进 2 拍：1 → 2 → 3（到终点）
+tickPlay(2);
+check(savedArchive().currentBeat === 3, '播放推进到区间终点（第 3 拍）');
+// 再推进一拍：回到起点继续循环（而非停止）
+tickPlay(1);
+check(savedArchive().currentBeat === 1, '到终点后自动回到区间起点继续循环');
+check(global.__intervalCbs.length === 1, '循环播放不会自行停止');
+
+// 从区间外（第 0 拍）按播放：先定位到起点
+global.__intervalCbs.length = 0;
+ensure('beatSlider').value = '0';
+ensure('beatSlider').dispatch('input', { target: ensure('beatSlider') });
+check(savedArchive().currentBeat === 0 && global.__intervalCbs.length === 0,
+  '拖到区间外（第 0 拍）时停止播放');
+click('playBtn');
+check(savedArchive().currentBeat === 1, '从区间外启动播放：先定位到区间起点');
+tickPlay(2);
+check(savedArchive().currentBeat === 3, '播放再次抵达区间终点');
+tickPlay(1);
+check(savedArchive().currentBeat === 1, '再次自动回绕循环');
+
+// 取消勾选：恢复全程播放并停止
+ensure('loopEnable').checked = false;
+ensure('loopEnable').dispatch('change', { target: ensure('loopEnable') });
+check(savedArchive().loopRange === null, '取消勾选：区间清空，恢复全程播放');
+check(global.__intervalCbs.length === 0, '取消后播放停止');
+check(!ensure('loopBar').classList.contains('active'), '区间条取消激活');
+
+// 全程播放走完全程后停止（不循环）
+click('playBtn');
+check(global.__intervalCbs.length === 1, '全程播放启动');
+tickPlay(savedArchive().state.beats + 1); // 推进足够多拍
+check(global.__intervalCbs.length === 0, '全程播放到终点后停止');
+
+// 重新启用区间 1..2，删除末拍到共 1 拍：区间退化为单点 → 恢复全程
+ensure('loopFrom').value = '1';
+ensure('loopTo').value = '2';
+ensure('loopEnable').checked = true;
+ensure('loopEnable').dispatch('change', { target: ensure('loopEnable') });
+check(savedArchive().loopRange && savedArchive().loopRange.to === 2, '重新启用区间 1..2');
+click('removeBeatBtn'); // 4 → 3
+click('removeBeatBtn'); // 3 → 2
+click('removeBeatBtn'); // 2 → 1
+check(savedArchive().state.beats === 1, '连续删除至 1 拍');
+check(savedArchive().loopRange === null, '区间无法容纳有效拍号：恢复全程播放');
+check(ensure('loopEnable').checked === false, '勾选状态同步取消');
+check(global.__intervalCbs.length === 0, '区间失效时播放已停止');
+check(/已无法容纳/.test(ensure('toast').textContent), '明确提示恢复全程播放');
+
+// 区间被夹紧但仍有效：加到 4 拍，设区间 2..4，删末拍 → 夹紧为 2..3
+click('addBeatBtn'); click('addBeatBtn'); click('addBeatBtn');
+check(savedArchive().state.beats === 4, '重新加回 4 拍');
+ensure('loopFrom').value = '2';
+ensure('loopTo').value = '4';
+ensure('loopEnable').checked = true;
+ensure('loopEnable').dispatch('change', { target: ensure('loopEnable') });
+check(savedArchive().currentBeat === 2, '启用后定位到新起点');
+click('removeBeatBtn'); // 4 → 3
+s = savedArchive();
+check(s.loopRange && s.loopRange.from === 2 && s.loopRange.to === 3, '删拍后区间夹紧为 2..3 并保留');
+check(s.currentBeat === 2, '当前拍仍在夹紧后区间内');
+check(/约束为/.test(ensure('toast').textContent), '提示区间已约束到有效拍号');
+
+// 起止拍选成同拍：不破坏已保存区间，只提示
+ensure('loopTo').value = '2';
+ensure('loopTo').dispatch('change', { target: ensure('loopTo') });
+s = savedArchive();
+check(s.loopRange.from === 2 && s.loopRange.to === 3, '同拍选择不写入，已保存区间不变');
+check(/同一拍/.test(ensure('toast').textContent), '同拍时明确提示');
+
+// 只读报告不受拍数 / 区间编辑影响
+check(savedArchive().reports.length === reportsCountBefore,
+  '增删拍与区间设置不影响已生成的只读报告数量');
+
+// 刷新等价口径：存档顶层带 loopRange、报告对象内不含该字段
+check(savedArchive().reports.every((r) => r.loopRange === undefined),
+  '只读报告快照内不含播放区间字段');
 
 console.log('\nDOM 冒烟：' + pass + ' 项全部通过 🎉');

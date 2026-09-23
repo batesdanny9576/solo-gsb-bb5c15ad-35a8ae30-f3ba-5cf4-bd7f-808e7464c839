@@ -1,7 +1,7 @@
 // 零依赖冒烟测试：直接验证核心推演逻辑
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
-const { simulate, normalizeState, buildReport, normalizeReport, DIRS, cellKey,
+const { simulate, normalizeState, clampLoopRange, buildReport, normalizeReport, DIRS, cellKey,
   analyzeReports, buildComparison, normalizeComparison, compactBeatLabels, compareConflictKey
 } = require('../public/app.js');
 
@@ -602,6 +602,53 @@ console.log('22) 持续冲突只在进入/离开共同范围时计数一次');
     'beat2 同格保持 1 条，beat3（持续同格但范围外）不产生新增');
   assert(r.beatsOnlyB.length === 1 && r.beatsOnlyB[0] === 3, 'beat3 列为 B 独有拍次提示');
   assert(r.excludedB === 1, 'B 的 beat3 同格计入排除数并在提示中说明');
+}
+
+console.log('23) clampLoopRange：排练区间循环的拍号约束');
+{
+  assert(clampLoopRange(null, 4) === null, '无区间 → null（全程播放）');
+  assert(clampLoopRange({}, 4) === null, '缺起止拍 → null');
+  assert(clampLoopRange({ from: 2, to: 2 }, 4) === null, '起止同拍 → 无法形成区间 → null');
+
+  let r = clampLoopRange({ from: 1, to: 0 }, 4);
+  assert(r.from === 0 && r.to === 1, '1..0 反转交换为 0..1，仍为有效区间');
+
+  r = clampLoopRange({ from: 1, to: 3 }, 4);
+  assert(r.from === 1 && r.to === 3, '正常区间原样保留');
+
+  r = clampLoopRange({ from: 3, to: 1 }, 4);
+  assert(r.from === 1 && r.to === 3, '起止反转自动交换');
+
+  r = clampLoopRange({ from: -5, to: 99 }, 6);
+  assert(r.from === 0 && r.to === 6, '越界端点夹紧到 [0, beats]');
+
+  // 删除末拍：原区间 1..4 在只剩 3 拍时夹紧为 1..3，仍有效
+  r = clampLoopRange({ from: 1, to: 4 }, 3);
+  assert(r.from === 1 && r.to === 3, '删拍后终点夹紧，区间保留');
+
+  // 原区间 3..4 删到只剩 3 拍 → 夹紧为 3..3 → 失效
+  assert(clampLoopRange({ from: 3, to: 4 }, 3) === null, '删拍后退化为单点 → 恢复全程');
+
+  // 起点 0（起点拍）允许作为区间端点
+  r = clampLoopRange({ from: 0, to: 1 }, 1);
+  assert(r.from === 0 && r.to === 1, '0 至 1 为有效区间');
+  assert(clampLoopRange({ from: 'x', to: 2 }, 4) === null, '非数字端点 → null');
+  assert(clampLoopRange({ from: 1, to: 2 }, 0) === null, 'beats 非法 → null');
+}
+
+console.log('24) 排练区间循环不影响只读报告快照');
+{
+  const src = {
+    beats: 4, actors: [
+      { id: 'a', name: 'A', start: { c: 4, r: 2 }, moves: { '1': 'L', '2': 'R' } }
+    ]
+  };
+  // 报告只取 state / 范围 / 演员，播放区间（存档层的 loopRange）不进入报告
+  const rpt = buildReport({ state: src, fromBeat: 0, toBeat: 4 });
+  assert(rpt.source.beats === 4 && rpt.loopRange === undefined,
+    '报告快照不包含播放区间字段');
+  const again = buildReport({ state: src, fromBeat: 2, toBeat: 3 });
+  assert(again.fromBeat === 2 && again.toBeat === 3, '报告范围独立于播放区间');
 }
 
 console.log('');

@@ -31,6 +31,19 @@
         <button type="button" id="editStartBtn" class="btn">✚ 设置起点模式</button>
       </div>
 
+      <div id="loopBar" class="loop-bar">
+        <label class="loop-enable">
+          <input type="checkbox" id="loopEnable">
+          <span>🔁 排练区间循环</span>
+        </label>
+        <select id="loopFrom" class="loop-select" aria-label="区间起点拍" disabled></select>
+        <span class="loop-sep">至</span>
+        <select id="loopTo" class="loop-select" aria-label="区间终点拍" disabled></select>
+        <button type="button" id="loopPreview" class="btn btn-sm" disabled
+          title="立即定位到起点并循环播放该区间">▶ 预览区间</button>
+        <span id="loopNote" class="loop-note"></span>
+      </div>
+
       <div id="startBanner" class="start-banner hidden">
         设置起点模式：在舞台上点击一个格子，作为 <strong id="startActorName"></strong> 的起点。
         再次点击该格取消，或按 Esc 退出。

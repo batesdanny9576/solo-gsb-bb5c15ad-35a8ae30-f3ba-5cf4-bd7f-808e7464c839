@@ -98,6 +98,27 @@
     return { beats, nextActorNum: Math.max(nextActorNum, actors.length + 1), actors };
   }
 
+  /* ---------------- 排练区间循环：拍号约束（纯函数，供测试调用） ----------------
+   * 把存档 / 用户输入的起止拍约束到 [0, beats]（0 为起点）：
+   *  - 越界端点夹紧到有效拍号；起止反转时自动交换
+   *  - 无法形成有效区间（起止同拍、不足两个位置）时返回 null，
+   *    调用方据此恢复全程播放
+   * ------------------------------------------------------------------------- */
+  function clampLoopRange(raw, beats) {
+    if (!raw || typeof raw !== 'object') return null;
+    const max = Math.trunc(Number(beats));
+    if (!Number.isFinite(max) || max < 1) return null;
+    let from = Math.trunc(Number(raw.from));
+    let to = Math.trunc(Number(raw.to));
+    if (!Number.isFinite(from) || !Number.isFinite(to)) return null;
+    const clamp = (n) => Math.min(Math.max(n, 0), max);
+    from = clamp(from);
+    to = clamp(to);
+    if (from > to) [from, to] = [to, from]; // 起止反转时自动交换
+    if (from === to) return null;           // 单点不成区间：恢复全程
+    return { from, to };
+  }
+
   /* ---------------- 核心推演（纯函数，供测试调用） ----------------
    * 返回:
    *  positions[b]: { actorId: "c,r" }  —— 每拍各演员所在格
@@ -836,7 +857,7 @@
   if (typeof document === 'undefined') {
     if (typeof module !== 'undefined' && module.exports) {
       module.exports = {
-        simulate, normalizeState, buildReport, normalizeReport,
+        simulate, normalizeState, clampLoopRange, buildReport, normalizeReport,
         analyzeReports, buildComparison, normalizeComparison,
         compactBeatLabels, compareConflictKey,
         DIRS, DIR_ORDER, COLS, ROWS, cellKey, fmtCoord, coordToKey, reportConflictKey
@@ -850,6 +871,7 @@
   let reports = [];            // 已生成的排练场记报告（只读快照）
   let comparisons = [];        // 已保存的报告对比（两份快照的差异）
   let currentBeat = 0;
+  let loopRange = null;        // 排练区间循环：{from,to}（拍号，0 为起点），null 为全程播放
   let sim = simulate(state.actors, state.beats);
   let settingActorId = null;   // 正在设置起点的演员
   let focusKey = null;         // 当前定位的冲突 key
@@ -866,7 +888,7 @@
   function save() {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify({
-        version: 1, savedAt: new Date().toISOString(), currentBeat, state, reports, comparisons
+        version: 1, savedAt: new Date().toISOString(), currentBeat, loopRange, state, reports, comparisons
       }));
     } catch (err) { /* 隐私模式等场景下静默失败 */ }
   }
@@ -877,6 +899,8 @@
       if (raw) {
         const parsed = JSON.parse(raw);
         state = normalizeState(parsed.state);
+        // 旧版本存档没有 loopRange 字段：按 null（全程播放）处理，保持向后兼容
+        loopRange = clampLoopRange(parsed.loopRange, state.beats);
         currentBeat = Math.min(Math.max(Number(parsed.currentBeat) || 0, 0), state.beats);
         // 旧版本存档没有 reports 字段：按空列表处理，保持向后兼容
         reports = (Array.isArray(parsed.reports) ? parsed.reports : [])
@@ -894,6 +918,7 @@
     state = demoState();
     reports = [];
     comparisons = [];
+    loopRange = null;
     currentBeat = 0;
     return false;
   }
@@ -1244,6 +1269,7 @@
     renderConflicts();
     renderTable();
     renderToolbar();
+    renderLoopBar();
     renderReports();
     renderComparisons();
   }
@@ -1301,6 +1327,121 @@
     commit();
   }
 
+  /* ---------------- 排练区间循环 ---------------- */
+  // 填充起止拍下拉（拍数变化时才重建，避免播放循环中重建选项打断渲染）
+  function fillLoopSelect(select, selected) {
+    if (select.children.length !== state.beats + 1) {
+      select.innerHTML = '';
+      for (let b = 0; b <= state.beats; b++) {
+        const opt = document.createElement('option');
+        opt.value = String(b);
+        opt.textContent = beatName(b);
+        select.appendChild(opt);
+      }
+    }
+    select.value = String(Math.min(Math.max(selected, 0), state.beats));
+  }
+
+  function renderLoopBar() {
+    const on = loopRange !== null;
+    const fromSel = $('loopFrom');
+    const toSel = $('loopTo');
+    fillLoopSelect(fromSel, on ? loopRange.from : 0);
+    fillLoopSelect(toSel, on ? loopRange.to : state.beats);
+
+    const cb = $('loopEnable');
+    cb.checked = on;
+    cb.disabled = settingActorId !== null;
+    fromSel.disabled = toSel.disabled = !on || settingActorId !== null;
+    $('loopPreview').disabled = !on || settingActorId !== null;
+    $('loopBar').classList.toggle('active', on);
+
+    const note = $('loopNote');
+    if (on) {
+      note.textContent = '循环区间：' + beatName(loopRange.from) + ' 至 ' + beatName(loopRange.to) +
+        '，播放到终点自动回到起点';
+      note.className = 'loop-note on';
+    } else {
+      note.textContent = '未启用：播放走完全程（起点 至 ' + beatName(state.beats) + '）';
+      note.className = 'loop-note';
+    }
+  }
+
+  // 设置 / 取消区间。next 为 null 时恢复全程；无效（起止同拍）同样回落全程并提示。
+  function applyLoopRange(next, silent) {
+    stopPlay();
+    const clamped = next ? clampLoopRange(next, state.beats) : null;
+    if (next && !clamped) {
+      loopRange = null;
+      save();
+      renderAll();
+      if (!silent) toast('起点与终点是同一拍，无法形成排练区间，已恢复全程播放', 'error');
+      return;
+    }
+    loopRange = clamped;
+    save();
+    renderAll();
+  }
+
+  function onLoopEnableChange(e) {
+    if (e.target.checked) {
+      const next = clampLoopRange(
+        { from: Number($('loopFrom').value), to: Number($('loopTo').value) }, state.beats);
+      if (!next) {
+        e.target.checked = false;
+        toast('起点与终点是同一拍，请先选择不同的起止拍', 'error');
+        return;
+      }
+      applyLoopRange(next, true);
+      startLoopPreview(); // 立即从区间起点预览并循环
+    } else {
+      applyLoopRange(null, true);
+    }
+  }
+
+  function onLoopEndpointChange() {
+    if (!loopRange) return;
+    const next = clampLoopRange(
+      { from: Number($('loopFrom').value), to: Number($('loopTo').value) }, state.beats);
+    if (!next) {
+      // 选成同拍：不破坏已保存区间，只回显原值并提示
+      renderLoopBar();
+      toast('起点与终点是同一拍，请选择不同的起止拍', 'error');
+      return;
+    }
+    loopRange = next;
+    save();
+    renderLoopBar();
+  }
+
+  // 立即预览区间：先定位到起点，再开始循环播放
+  function startLoopPreview() {
+    if (settingActorId || !loopRange) return;
+    currentBeat = loopRange.from;
+    focusKey = null;
+    save();
+    renderAll();
+    startPlayTick();
+  }
+
+  // 增删拍后把区间约束到有效拍号；无法形成有效区间时恢复全程播放。
+  // 调用方需随后 commit() 统一保存与渲染。
+  function constrainLoopAfterBeatChange() {
+    if (!loopRange) return;
+    const next = clampLoopRange(loopRange, state.beats);
+    if (!next) {
+      loopRange = null;
+      stopPlay();
+      toast('排练区间已无法容纳有效拍号，已恢复全程播放', 'error');
+      return;
+    }
+    if (next.from !== loopRange.from || next.to !== loopRange.to) {
+      loopRange = next;
+      if (currentBeat < next.from || currentBeat > next.to) currentBeat = next.from;
+      toast('拍数变化，排练区间已约束为 ' + beatName(next.from) + ' 至 ' + beatName(next.to));
+    }
+  }
+
   /* ---------------- 拍 / 播放 ---------------- */
   function gotoBeat(b) {
     const next = Math.min(Math.max(b, 0), state.beats);
@@ -1315,19 +1456,38 @@
     playing = false;
     if (playTimer) { clearInterval(playTimer); playTimer = null; }
   }
-  function togglePlay() {
-    if (settingActorId) return;
-    if (playing) { stopPlay(); renderToolbar(); return; }
-    if (currentBeat === state.beats) currentBeat = 0;
+  function startPlayTick() {
+    stopPlay();
     playing = true;
     renderToolbar();
     playTimer = setInterval(() => {
-      if (currentBeat >= state.beats) { stopPlay(); renderToolbar(); return; }
-      currentBeat += 1;
+      const end = loopRange ? loopRange.to : state.beats;
+      if (currentBeat >= end) {
+        if (loopRange) currentBeat = loopRange.from; // 到终点：回到区间起点继续循环
+        else { stopPlay(); renderToolbar(); return; }
+      } else {
+        currentBeat += 1;
+      }
       focusKey = null;
       save();
       renderAll();
     }, 800);
+  }
+  function togglePlay() {
+    if (settingActorId) return;
+    if (playing) { stopPlay(); renderToolbar(); return; }
+    if (loopRange) {
+      // 从区间外（或全程终点）启动：先定位到区间起点
+      if (currentBeat < loopRange.from || currentBeat > loopRange.to) {
+        currentBeat = loopRange.from;
+        focusKey = null;
+        save();
+        renderAll();
+      }
+    } else if (currentBeat === state.beats) {
+      currentBeat = 0;
+    }
+    startPlayTick();
   }
 
   /* ---------------- 演员 / 拍增删 ---------------- */
@@ -1349,6 +1509,7 @@
   function addBeat() {
     if (state.beats >= 100) { toast('最多支持 100 拍', 'error'); return; }
     state.beats += 1;
+    constrainLoopAfterBeatChange();
     commit(state.beats);
   }
 
@@ -1358,6 +1519,7 @@
     state.beats -= 1;
     state.actors.forEach((a) => delete a.moves[String(dead)]);
     if (currentBeat > state.beats) currentBeat = state.beats;
+    constrainLoopAfterBeatChange();
     commit();
   }
 
@@ -1421,6 +1583,8 @@
       try {
         const parsed = JSON.parse(String(reader.result));
         state = normalizeState(parsed.state || parsed);
+        // 导入的是另一份走位文件：排练区间属于本浏览器的播放设置，不跨文件带入
+        loopRange = null;
         currentBeat = 0;
         focusKey = null;
         stopPlay();
@@ -1438,6 +1602,7 @@
     state = freshState();
     reports = [];
     comparisons = [];
+    loopRange = null;
     currentBeat = 0;
     focusKey = null;
     settingActorId = null;
@@ -2147,6 +2312,18 @@
     $('prevBeat').addEventListener('click', () => gotoBeat(currentBeat - 1));
     $('nextBeat').addEventListener('click', () => gotoBeat(currentBeat + 1));
     $('playBtn').addEventListener('click', togglePlay);
+    $('loopEnable').addEventListener('change', onLoopEnableChange);
+    $('loopFrom').addEventListener('change', onLoopEndpointChange);
+    $('loopTo').addEventListener('change', onLoopEndpointChange);
+    $('loopPreview').addEventListener('click', () => {
+      if (!loopRange) {
+        const next = clampLoopRange(
+          { from: Number($('loopFrom').value), to: Number($('loopTo').value) }, state.beats);
+        if (!next) { toast('起点与终点是同一拍，请选择不同的起止拍', 'error'); return; }
+        applyLoopRange(next, true);
+      }
+      startLoopPreview();
+    });
     $('editStartBtn').addEventListener('click', () => {
       if (settingActorId) toggleStartSetting(settingActorId);
       else if (state.actors[0]) toggleStartSetting(state.actors[0].id);
