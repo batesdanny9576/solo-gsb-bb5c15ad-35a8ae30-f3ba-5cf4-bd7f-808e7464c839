@@ -398,4 +398,95 @@ check(!document.body.classList.contains('printing-report'), '关闭后清理打�
 ensure('compareList').querySelector('.rr-del').click();
 check(JSON.parse(storage['stage-blocking:v1']).comparisons.length === 0, '删除对比后存档更新');
 
+// ---------- 排练区间循环 ----------
+const loopSaved = () => JSON.parse(storage['stage-blocking:v1']).loopRange;
+check(loopSaved() === null, '初始无排练区间（全程播放）');
+check(ensure('loopFrom').disabled === true && ensure('loopTo').disabled === true,
+  '未启用区间时起止拍选择器禁用');
+
+click('loopToggleBtn');
+check(loopSaved() !== null && loopSaved().from === 0 && loopSaved().to === 4,
+  '启用区间循环：默认 起点 — 第 4 拍 并落盘');
+check(ensure('loopFrom').disabled === false && ensure('loopTo').disabled === false,
+  '启用后起止拍选择器可用');
+check(ensure('loopToggleBtn').classList.contains('active'), '循环按钮高亮');
+check(ensure('loopToggleBtn').getAttribute('aria-pressed') === 'true', '按钮 aria-pressed=true');
+
+// 设置起始拍：立即定位到区间起点预览
+ensure('loopFrom').value = '2';
+ensure('loopFrom').dispatch('change', { target: ensure('loopFrom') });
+check(loopSaved().from === 2 && loopSaved().to === 4, '修改起始拍后区间保存');
+check(JSON.parse(storage['stage-blocking:v1']).currentBeat === 2, '设置后立即定位到区间起点预览');
+
+// 终点不晚于起点时自动把起点前推，保证始终是有效区间
+ensure('loopTo').value = '2';
+ensure('loopTo').dispatch('change', { target: ensure('loopTo') });
+check(loopSaved().from === 1 && loopSaved().to === 2, '终点贴住起点时自动前推起点（1..2）');
+
+// 恢复 2..4
+ensure('loopFrom').value = '2';
+ensure('loopFrom').dispatch('change', { target: ensure('loopFrom') });
+check(loopSaved().from === 2 && loopSaved().to === 3, '起点后推时自动把终点让到 2..3');
+ensure('loopTo').value = '4';
+ensure('loopTo').dispatch('change', { target: ensure('loopTo') });
+check(loopSaved().from === 2 && loopSaved().to === 4, '区间恢复为 2..4');
+
+// 从区间外启动播放：先定位到区间起点
+ensure('beatSlider').value = '0';
+ensure('beatSlider').dispatch('input', { target: ensure('beatSlider') });
+check(JSON.parse(storage['stage-blocking:v1']).currentBeat === 0, '手动切到区间外（起点）');
+click('playBtn');
+check(JSON.parse(storage['stage-blocking:v1']).currentBeat === 2,
+  '区间外启动播放：先定位到区间起点（第 2 拍）');
+click('playBtn'); // 停止
+
+// 从区间内启动：不迁移当前拍
+ensure('beatSlider').value = '3';
+ensure('beatSlider').dispatch('input', { target: ensure('beatSlider') });
+click('playBtn');
+check(JSON.parse(storage['stage-blocking:v1']).currentBeat === 3,
+  '区间内启动播放：停留在当前拍继续');
+click('playBtn'); // 停止
+
+// 删拍后约束区间：4 拍 → 3 拍，2..4 变为 2..3
+click('removeBeatBtn');
+check(JSON.parse(storage['stage-blocking:v1']).state.beats === 3, '删除末拍：剩 3 拍');
+check(loopSaved() !== null && loopSaved().from === 2 && loopSaved().to === 3,
+  '删拍后区间约束到有效拍号 2..3');
+
+// 再删到 2 拍：2..3 退化为重合区间，无法形成有效区间 → 恢复全程播放
+click('removeBeatBtn');
+check(JSON.parse(storage['stage-blocking:v1']).state.beats === 2, '再次删除末拍：剩 2 拍');
+check(loopSaved() === null, '区间无法形成时恢复全程播放');
+check(!ensure('loopToggleBtn').classList.contains('active'), '失效后循环按钮取消高亮');
+check(ensure('loopFrom').disabled === true, '失效后起止拍选择器重新禁用');
+
+// 重新启用（按当前 2 拍预填 0..2），再手动关闭
+click('loopToggleBtn');
+check(loopSaved() !== null && loopSaved().from === 0 && loopSaved().to === 2,
+  '重新启用：按当前拍数预填有效区间');
+click('loopToggleBtn');
+check(loopSaved() === null, '手动关闭循环恢复全程播放');
+
+// 区间设置不影响报告快照
+click('newReportBtn');
+const modal = ensure('reportModal');
+modal.querySelectorAll('input.rp-actor-cb').forEach((cb) => { cb.checked = true; });
+const selFrom = ensure('rpFrom');
+if (!selFrom.children.length) {
+  for (let b = 0; b <= 2; b++) { const o = new El('option'); o.value = String(b); selFrom.appendChild(o); }
+}
+const selTo = ensure('rpTo');
+if (!selTo.children.length) {
+  for (let b = 0; b <= 2; b++) { const o = new El('option'); o.value = String(b); selTo.appendChild(o); }
+}
+selFrom.value = '0';
+selTo.value = '2';
+click('rpSubmit');
+const allReports = JSON.parse(storage['stage-blocking:v1']).reports;
+const rpt = allReports[allReports.length - 1];
+check(rpt.source && rpt.source.beats === 2 && rpt.source.loopRange === undefined,
+  '报告快照只内嵌走位数据，不含循环区间设置');
+click('viewerClose');
+
 console.log('\nDOM 冒烟：' + pass + ' 项全部通过 🎉');

@@ -11,7 +11,7 @@
 <body>
   <header class="app-header">
     <h1>🎭 剧场排练走位工具</h1>
-    <p class="subtitle">8 × 6 舞台网格 · 逐拍推演 · 碰撞 / 互换冲突检测 · 排练场记报告 · 报告对比 · 本地保存</p>
+    <p class="subtitle">8 × 6 舞台网格 · 逐拍推演 · 排练区间循环 · 碰撞 / 互换冲突检测 · 排练场记报告 · 报告对比 · 本地保存</p>
   </header>
 
   <main class="layout">
@@ -28,6 +28,14 @@
           <button type="button" id="playBtn" class="btn" title="自动逐拍播放">⏯ 播放</button>
         </div>
         <input type="range" id="beatSlider" min="0" max="4" value="0" step="1" class="beat-slider" aria-label="选择拍">
+        <div class="loop-controls">
+          <button type="button" id="loopToggleBtn" class="btn btn-sm" aria-pressed="false" title="开启后在所选起止拍之间循环播放">🔁 区间循环</button>
+          <span class="loop-range">
+            <select id="loopFrom" class="loop-select" aria-label="循环起始拍" disabled></select>
+            <span class="loop-sep">至</span>
+            <select id="loopTo" class="loop-select" aria-label="循环结束拍" disabled></select>
+          </span>
+        </div>
         <button type="button" id="editStartBtn" class="btn">✚ 设置起点模式</button>
       </div>
 

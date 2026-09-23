@@ -99,6 +99,23 @@ html, body {
   accent-color: var(--accent);
 }
 
+/* ---------- 排练区间循环 ---------- */
+.loop-controls { display: flex; align-items: center; gap: 8px; }
+.loop-range { display: inline-flex; align-items: center; gap: 6px; }
+.loop-select {
+  appearance: none;
+  background: #141722;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 6px;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+.loop-select:focus { outline: none; border-color: var(--accent); }
+.loop-select:disabled { opacity: 0.45; cursor: not-allowed; }
+.loop-sep { color: var(--text-dim); font-size: 0.75rem; }
+
 .start-banner {
   background: #3a2f16;
   border: 1px solid var(--accent);

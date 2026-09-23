@@ -1,7 +1,7 @@
 // 零依赖冒烟测试：直接验证核心推演逻辑
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
-const { simulate, normalizeState, buildReport, normalizeReport, DIRS, cellKey,
+const { simulate, normalizeState, normalizeLoopRange, buildReport, normalizeReport, DIRS, cellKey,
   analyzeReports, buildComparison, normalizeComparison, compactBeatLabels, compareConflictKey
 } = require('../public/app.js');
 
@@ -602,6 +602,27 @@ console.log('22) 持续冲突只在进入/离开共同范围时计数一次');
     'beat2 同格保持 1 条，beat3（持续同格但范围外）不产生新增');
   assert(r.beatsOnlyB.length === 1 && r.beatsOnlyB[0] === 3, 'beat3 列为 B 独有拍次提示');
   assert(r.excludedB === 1, 'B 的 beat3 同格计入排除数并在提示中说明');
+}
+
+console.log('23) normalizeLoopRange：排练区间约束与失效恢复全程播放');
+{
+  assert(normalizeLoopRange(null, 4) === null, '未设置 → null（全程播放）');
+  assert(normalizeLoopRange(undefined, 4) === null, '旧存档缺字段 → null');
+  assert(normalizeLoopRange('1-3', 4) === null, '非对象输入 → null');
+  const ok = normalizeLoopRange({ from: 1, to: 3 }, 4);
+  assert(ok && ok.from === 1 && ok.to === 3, '有效区间原样保留');
+  const clamped = normalizeLoopRange({ from: 2, to: 5 }, 3);
+  assert(clamped && clamped.from === 2 && clamped.to === 3, '删拍后终点约束到有效拍号');
+  assert(normalizeLoopRange({ from: 3, to: 5 }, 2) === null, '区间整体超出新拍数 → 失效为 null');
+  assert(normalizeLoopRange({ from: 2, to: 2 }, 4) === null, '起止重合（无法形成区间）→ null');
+  const swapped = normalizeLoopRange({ from: 4, to: 1 }, 4);
+  assert(swapped && swapped.from === 1 && swapped.to === 4, '起止写反自动交换');
+  const wide = normalizeLoopRange({ from: -3, to: 99 }, 4);
+  assert(wide && wide.from === 0 && wide.to === 4, '越界端点约束到 0..beats');
+  assert(normalizeLoopRange({ from: 'x', to: 3 }, 4) === null, '非数字端点 → null');
+  const min = normalizeLoopRange({ from: 0, to: 1 }, 1);
+  assert(min && min.from === 0 && min.to === 1, '最小有效区间 [起点, 第 1 拍] 仍成立');
+  assert(normalizeLoopRange({ from: 0, to: 1 }, 0) === null, '拍数非法 → null');
 }
 
 console.log('');
